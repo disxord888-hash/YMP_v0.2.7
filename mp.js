@@ -498,17 +498,7 @@ async function getMetaData(id) {
 }
 
 async function searchYoutube(query) {
-    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-
-    // Proxies list with different methods
-    const proxies = [
-        { url: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, type: 'text' },
-        { url: u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, type: 'text' },
-        { url: u => `https://corsproxy.io/?${encodeURIComponent(u)}`, type: 'text' },
-        { url: u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, type: 'json' }
-    ];
-
-    const fetchWithTimeout = async (url, options, timeout = 5000) => {
+    const fetchWithTimeout = async (url, options, timeout = 8000) => {
         const controller = new AbortController();
         const id = setTimeout(() => controller.abort(), timeout);
         try {
@@ -521,21 +511,115 @@ async function searchYoutube(query) {
         }
     };
 
-    let html = null;
+    // === Strategy 1: Invidious API (JSON, no CORS proxy needed) ===
+    const invidiousInstances = [
+        'https://inv.nadeko.net',
+        'https://invidious.nerdvpn.de',
+        'https://invidious.private.coffee',
+        'https://iv.datura.network',
+        'https://invidious.protokolla.fi',
+        'https://yt.artemislena.eu',
+    ];
 
+    for (const instance of invidiousInstances) {
+        try {
+            const apiUrl = `${instance}/api/v1/search?q=${encodeURIComponent(query)}&type=video&sort_by=relevance`;
+            console.log(`Trying Invidious: ${instance}`);
+            const response = await fetchWithTimeout(apiUrl);
+            if (!response.ok) continue;
+
+            const data = await response.json();
+            if (!Array.isArray(data) || data.length === 0) continue;
+
+            const results = [];
+            for (const item of data) {
+                if (item.type !== 'video') continue;
+                const isShort = (item.lengthSeconds && item.lengthSeconds < 62) ||
+                    (item.title && item.title.toLowerCase().includes('#shorts'));
+                if (isShort && !isShortVideoAllowed) continue;
+
+                results.push({
+                    id: item.videoId,
+                    title: item.title || 'Unknown Title',
+                    author: item.author || 'Unknown Artist'
+                });
+                if (results.length >= 5) break;
+            }
+            if (results.length > 0) {
+                console.log(`Invidious search succeeded via ${instance}`);
+                return results;
+            }
+        } catch (e) {
+            console.warn(`Invidious ${instance} failed:`, e.message || e);
+        }
+    }
+
+    // === Strategy 2: Piped API (another YouTube frontend) ===
+    const pipedInstances = [
+        'https://pipedapi.kavin.rocks',
+        'https://pipedapi.adminforge.de',
+        'https://api.piped.projectsegfault.com',
+    ];
+
+    for (const instance of pipedInstances) {
+        try {
+            const apiUrl = `${instance}/search?q=${encodeURIComponent(query)}&filter=videos`;
+            console.log(`Trying Piped: ${instance}`);
+            const response = await fetchWithTimeout(apiUrl);
+            if (!response.ok) continue;
+
+            const data = await response.json();
+            const items = data.items || data;
+            if (!Array.isArray(items) || items.length === 0) continue;
+
+            const results = [];
+            for (const item of items) {
+                if (item.type && item.type !== 'stream') continue;
+                const videoId = item.url ? item.url.replace('/watch?v=', '') : null;
+                if (!videoId) continue;
+
+                const isShort = (item.duration && item.duration < 62) ||
+                    (item.isShort) ||
+                    (item.title && item.title.toLowerCase().includes('#shorts'));
+                if (isShort && !isShortVideoAllowed) continue;
+
+                results.push({
+                    id: videoId,
+                    title: item.title || 'Unknown Title',
+                    author: item.uploaderName || item.uploader || 'Unknown Artist'
+                });
+                if (results.length >= 5) break;
+            }
+            if (results.length > 0) {
+                console.log(`Piped search succeeded via ${instance}`);
+                return results;
+            }
+        } catch (e) {
+            console.warn(`Piped ${instance} failed:`, e.message || e);
+        }
+    }
+
+    // === Strategy 3: CORS Proxy fallback (original method) ===
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+    const proxies = [
+        { url: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, type: 'text' },
+        { url: u => `https://corsproxy.io/?${encodeURIComponent(u)}`, type: 'text' },
+        { url: u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, type: 'text' },
+        { url: u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, type: 'json' }
+    ];
+
+    let html = null;
     for (const p of proxies) {
         try {
             console.log(`Trying proxy: ${p.url(searchUrl)}`);
             const response = await fetchWithTimeout(p.url(searchUrl));
             if (!response.ok) continue;
-
             if (p.type === 'json') {
                 const data = await response.json();
                 html = data.contents;
             } else {
                 html = await response.text();
             }
-
             if (html && (html.includes('ytInitialData') || html.includes('videoRenderer'))) break;
         } catch (e) {
             console.warn(`Proxy failed:`, e);
@@ -543,78 +627,57 @@ async function searchYoutube(query) {
     }
 
     if (!html) {
-        console.error('All proxies failed for YouTube search');
-        return null; // Return null to indicate total failure
+        console.error('All search methods failed');
+        return null;
     }
 
     try {
         const results = [];
-
-        // Match ytInitialData (it can be var, window.ytInitialData, window['ytInitialData'])
-        // Use [\s\S]*? to match across newlines
         const initialDataMatch = html.match(/(?:var|window\[['"]ytInitialData['"]\]|window\.ytInitialData)\s*=\s*({[\s\S]*?});/);
         if (initialDataMatch) {
             try {
                 const data = JSON.parse(initialDataMatch[1]);
-                // Drill down to the video results
                 const sections = data.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents;
                 if (sections) {
                     for (const section of sections) {
                         const videos = section.itemSectionRenderer?.contents;
                         if (!videos) continue;
-
                         for (const v of videos) {
                             const video = v.videoRenderer;
                             if (!video) continue;
-
                             const id = video.videoId;
                             const title = video.title?.runs?.[0]?.text || video.title?.simpleText || "Unknown Title";
                             const author = video.ownerText?.runs?.[0]?.text || video.shortBylineText?.runs?.[0]?.text || "Unknown Artist";
-
-                            // Shorts check
-                            const isShort = (video.viewCountText?.simpleText?.includes('shorts') ||
-                                title.toLowerCase().includes('#shorts'));
+                            const isShort = (video.viewCountText?.simpleText?.includes('shorts') || title.toLowerCase().includes('#shorts'));
                             if (isShort && !isShortVideoAllowed) continue;
-
                             results.push({ id, title: decodeChars(title), author: decodeChars(author) });
                             if (results.length >= 5) break;
                         }
                         if (results.length > 0) break;
                     }
                 }
-            } catch (e) {
-                console.warn('ytInitialData parse failed:', e);
-            }
+            } catch (e) { console.warn('ytInitialData parse failed:', e); }
         }
-
         if (results.length === 0) {
-            // Fallback regex approach
             const videoMatches = [...html.matchAll(/"videoRenderer"\s*:\s*\{/g)];
             for (const m of videoMatches) {
                 const start = m.index;
-                // Take a chunk of text
                 const block = html.substring(start, start + 2000);
-
                 const idMatch = block.match(/"videoId"\s*:\s*"([^"]+)"/);
                 if (!idMatch) continue;
                 const id = idMatch[1];
-
                 const isShort = block.includes('"overlayStyle":"SHORTS"') || block.includes('"style":"SHORTS"');
                 if (isShort && !isShortVideoAllowed) continue;
-
                 let title = "Unknown Title";
                 const tMatch = block.match(/"title"\s*:\s*\{.*?"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
                 if (tMatch) title = decodeChars(tMatch[1]);
-
                 let author = "Unknown Artist";
                 const aMatch = block.match(/"(?:longBylineText|ownerText|shortBylineText|ownerTitle|bylineText)"\s*:\s*\{.*?"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
                 if (aMatch) author = decodeChars(aMatch[1]);
-
                 results.push({ id, title, author });
                 if (results.length >= 5) break;
             }
         }
-
         return results;
     } catch (e) {
         console.warn('YouTube search parse failed:', e);
