@@ -66,6 +66,7 @@ let isShortcutDisplayEnabled = false;
 let isShortVideoAllowed = false; // Toggle for allowing #shorts
 let escPrefix = false;
 let isDraggingQueueItem = false;
+let preferredQuality = 'default'; // YouTube video quality preference
 
 // ===== Supported Media Formats (Central Definition) =====
 const MEDIA_FORMATS = {
@@ -211,6 +212,34 @@ function updateUIStates() {
     el.btnShuffle.style.background = isShuffle ? 'var(--primary)' : 'var(--bg-item)';
 }
 
+// --- Video Quality Control ---
+const qualityLabels = {
+    'tiny': '144p', 'small': '240p', 'medium': '360p',
+    'large': '480p', 'hd720': '720p', 'hd1080': '1080p',
+    'hd1440': '1440p', 'hd2160': '4K', 'highres': '最高画質',
+    'auto': 'Auto', 'default': 'Auto'
+};
+
+function updateQualityDisplay() {
+    const qualityCurrent = document.getElementById('quality-current');
+    if (!qualityCurrent) return;
+    if (isPlayerReady && player && typeof player.getPlaybackQuality === 'function') {
+        const q = player.getPlaybackQuality();
+        qualityCurrent.textContent = qualityLabels[q] || q || '';
+    }
+}
+
+const qualitySelect = document.getElementById('quality-select');
+if (qualitySelect) {
+    qualitySelect.onchange = () => {
+        preferredQuality = qualitySelect.value;
+        if (isPlayerReady && player && typeof player.setPlaybackQuality === 'function') {
+            player.setPlaybackQuality(preferredQuality);
+        }
+        updateQualityDisplay();
+    };
+}
+
 // --- YouTube API ---
 function onYouTubeIframeAPIReady() {
     player = new YT.Player('youtube-player', {
@@ -230,7 +259,18 @@ function onYouTubeIframeAPIReady() {
             },
             'onStateChange': (e) => {
                 if (e.data === YT.PlayerState.ENDED) skipNext();
-                if (e.data === YT.PlayerState.PLAYING) syncCurrentInfo();
+                if (e.data === YT.PlayerState.PLAYING) {
+                    syncCurrentInfo();
+                    // Apply preferred quality when video starts playing
+                    if (preferredQuality !== 'default' && typeof player.setPlaybackQuality === 'function') {
+                        player.setPlaybackQuality(preferredQuality);
+                    }
+                    // Update current quality display
+                    updateQualityDisplay();
+                }
+            },
+            'onPlaybackQualityChange': (e) => {
+                updateQualityDisplay();
             },
             'onError': (e) => {
                 // エラーコード: 2=無効なパラメータ, 5=HTML5エラー, 100=動画が見つからない, 101/150=埋め込み禁止

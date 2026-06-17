@@ -468,6 +468,21 @@
                             style="width: 50px; background: transparent; border: 1px solid var(--border); color: var(--primary-light); text-align: center; border-radius: 4px; font-family: monospace;">
                         <span style="font-size: 0.85rem; color: var(--primary-light);">%</span>
                     </div>
+                    <div class="audio-row" style="display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem;">
+                        <label style="font-size: 0.85rem; color: var(--text-muted); min-width: 80px;">🎬
+                            Quality</label>
+                        <select id="quality-select"
+                            style="flex: 1; background: var(--bg-item); border: 1px solid var(--border); color: var(--primary-light); border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.85rem; font-family: inherit;">
+                            <option value="default">Auto</option>
+                            <option value="small">144p</option>
+                            <option value="medium">360p</option>
+                            <option value="large">480p</option>
+                            <option value="hd720">720p</option>
+                            <option value="hd1080">1080p</option>
+                            <option value="highres">最高画質</option>
+                        </select>
+                        <span id="quality-current" style="font-size: 0.75rem; color: var(--text-muted); min-width: 50px;"></span>
+                    </div>
                 </div>
             </div>
 
